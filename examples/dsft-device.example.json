@@ -1,0 +1,11 @@
+{
+  "input": {
+    "backend": "dsft",
+    "serial": "REPLACE_WITH_YOUR_DS_FT_SERIAL",
+    "revision": null
+  },
+  "capture": {
+    "backend": "ds-ftd2",
+    "stable_id": "REPLACE_WITH_STABLE_ID_FROM_CAPTURE_LIST"
+  }
+}

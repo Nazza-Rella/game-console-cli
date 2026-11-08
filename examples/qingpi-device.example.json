@@ -1,0 +1,12 @@
+{
+  "input": {
+    "backend": "qingpi",
+    "vid": "0x2e8a",
+    "pid": "0x000a",
+    "serial": "REPLACE_WITH_YOUR_DEVICE_SERIAL"
+  },
+  "capture": {
+    "backend": "ll-spa3",
+    "stable_id": "REPLACE_WITH_STABLE_ID_FROM_CAPTURE_LIST"
+  }
+}

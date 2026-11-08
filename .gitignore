@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+
+# Created while running
+capture/
+capture-*/
+input-sessions/
+
+# Personal settings
+device.json
+*-device.json
+Capture3DS.json
+
+# DLLs each user obtains from the original distributors
+CyUSB.dll
+ftd2xx.dll
+FTD3XX.dll
+libusb-1.0.dll
+
+# Build output
+CaptureCli.exe
+CaptureCliTests.exe

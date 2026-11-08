@@ -1,0 +1,74 @@
+DirectShow.NET library source and provenance
+============================================
+
+Library used by NX
+------------------
+File: DirectShowLib-2005.dll
+Assembly version: 2.1.0.0
+Size: 303,104 bytes
+Public key token: 67e7b740cdfc2d3f
+SHA-256: BBCBB170242D9FF1B56680A80B1F8755DF1135F9C714535FF3B3F575442F38DC
+
+The application uses this separate DLL from the official NX installation.
+NX has not modified this DLL for its sound or preview changes.
+
+Source archive
+--------------
+File: source\DirectShow.NET-e42f766308bf6f4cbc2fae942986b0c42dfa137c.zip
+Size: 355,416 bytes
+SHA-256: EEBFE7D44822B96A644C377C24526231D1A156BECD2EBBFECD6C6B81D0F29700
+
+This is the unmodified archive of the initial source import in the
+pauldotknopf/DirectShow.NET mirror, commit:
+e42f766308bf6f4cbc2fae942986b0c42dfa137c
+
+https://github.com/pauldotknopf/DirectShow.NET/commit/e42f766308bf6f4cbc2fae942986b0c42dfa137c
+https://codeload.github.com/pauldotknopf/DirectShow.NET/zip/e42f766308bf6f4cbc2fae942986b0c42dfa137c
+
+It is not renamed or represented as the official DirectShowLibV2-1.zip.
+The original project/release information is available at:
+https://directshownet.sourceforge.net/
+https://sourceforge.net/projects/directshownet/files/DirectShowNET/v2.1/
+
+The mirror archive contains the library DLL and its source/build projects
+in the same initial import. Its lib/DirectShowLib-2005.dll matches the NX
+library byte for byte. All 44 Compile files referenced by the 2005 project
+are present, together with the project/solution files and DShowNET.snk.
+The signing key's public key matches the existing DLL.
+
+Licence
+-------
+COPYING is an unchanged copy of the archive's license.txt (LGPL 2.1).
+COPYING SHA-256:
+CF8725E9336B3778B06CE8678E2DA8E5A154C3496D9FE206FCC24E20E47D5D7B
+
+Individual source files specify LGPL version 2.1 or any later version.
+Their original notices are preserved within the source archive.
+
+Building an interface-compatible replacement
+--------------------------------------------
+Extract the source archive to a working directory. The original build
+projects are src/DirectShowLib-2005.csproj and src/DirectShowLib-2008.csproj.
+Use the Release configuration, the supplied DShowNET.snk and a compatible
+.NET Framework C# build environment. The source uses the generated assembly
+version 2.1.0.*; for an in-place replacement of NX's existing strongly named
+reference, set AssemblyVersion in your working copy to 2.1.0.0 and retain
+the assembly name DirectShowLib-2005, signing key and compatible public API.
+Keep your modifications in that working copy; this supplied archive is intact.
+
+Close NX before substituting an interface-compatible modified library and
+keep a backup of the previous DLL. Modification of the library and reverse
+engineering to debug those modifications are not restricted by NX's
+application-specific commercial-use or redistribution terms.
+
+Verification scope
+------------------
+The included prebuilt DLL's identity, the source/project completeness and
+signing-key correspondence were checked. A separate temporary Release library
+was also compiled with the .NET Framework 4 C# compiler, USING_NET20, the
+supplied signing key and AssemblyVersion set to 2.1.0.0 in the temporary copy.
+Its assembly identity, all 822 types, 2,909 method signatures/attributes and
+marshalling definitions, field/layout information and all 180 implemented
+methods' normalized IL matched the existing DLL. This verifies source
+correspondence, not bit-for-bit reproduction of the historical PE file.
+No rebuilt library is installed by this patch; the source archive is unchanged.

@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"seconds": 1.10, "circle": [255, 128], "touch": [160, 120]},
+    {"seconds": 1.20, "circle": [128, 0], "touch": [200, 100]},
+    {"seconds": 0.00}
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"seconds": 0.10, "circle": [255, 128], "touch": [160, 120]},
+    {"seconds": 0.06, "circle": [128, 0], "touch": [160, 120], "buttons": ["l"]},
+    {"seconds": 0.05}
+  ]
+}

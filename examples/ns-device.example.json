@@ -1,0 +1,12 @@
+{
+  "input": {
+    "backend": "ns",
+    "vid": "REPLACE_WITH_VID",
+    "pid": "REPLACE_WITH_PID",
+    "serial": "REPLACE_WITH_YOUR_DEVICE_SERIAL"
+  },
+  "capture": {
+    "backend": "dshow",
+    "stable_id": "REPLACE_WITH_STABLE_ID_FROM_CAPTURE_LIST"
+  }
+}

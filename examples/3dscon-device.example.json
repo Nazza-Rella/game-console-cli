@@ -1,0 +1,13 @@
+{
+  "input": {
+    "backend": "3dscon",
+    "vid": "0x16c0",
+    "pid": "0x0483",
+    "serial": "REPLACE_WITH_YOUR_DEVICE_SERIAL",
+    "firmware": null
+  },
+  "capture": {
+    "backend": "n3dsxl",
+    "stable_id": "N3dsxl:serial:REPLACE_WITH_YOUR_CAPTURE_SERIAL"
+  }
+}

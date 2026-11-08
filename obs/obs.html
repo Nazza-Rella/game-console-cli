@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'">
+<title>ゲーム機操作CLI OBS</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000 }
+canvas { position: absolute; image-rendering: pixelated; visibility: hidden }
+#notice { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: #111; color: #bbb; font: 28px 'Yu Gothic UI', sans-serif }
+body.live canvas { visibility: visible }
+body.live #notice { display: none }
+</style>
+<canvas id="screen" width="400" height="480"></canvas>
+<div id="notice">映像を待っています</div>
+<script src="obs-audio.js"></script>
+<script>
+'use strict';
+// OBS browser source for "3ds_cli.py capture start --obs": reads obs-live.json next to this page.
+// Video is shown when the audio that came with it plays, so the two stay in step.
+const canvas = document.getElementById('screen'), screen2d = canvas.getContext('2d', { alpha: false });
+const notice = document.getElementById('notice');
+const STALE_MS = 1500;
+let session = null, lastFrame = -1, shownFrame = -1, lastArrival = 0, context = null, audio = null;
+// Read by tests and when checking a stream: packets read, frames shown and audio counters.
+window.obsStats = { packets: 0, frames: 0, torn: 0, readErrors: 0, badImages: 0, audio: null };
+
+function fit() {
+  const scale = Math.min(innerWidth / canvas.width, innerHeight / canvas.height);
+  const width = Math.round(canvas.width * scale), height = Math.round(canvas.height * scale);
+  Object.assign(canvas.style, { width: width + 'px', height: height + 'px',
+    left: Math.floor((innerWidth - width) / 2) + 'px', top: Math.floor((innerHeight - height) / 2) + 'px' });
+}
+
+function pcm(base64) {
+  const raw = atob(base64), bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return new Int16Array(bytes.buffer, 0, bytes.length >> 1);
+}
+
+// Context seconds at which the audio of this packet has finished playing, or null without audio.
+function playAudio(packet) {
+  const sound = packet.audio;
+  if (!sound || !sound.data) return null;
+  if (!context) {
+    context = new AudioContext({ latencyHint: 'interactive' });
+    audio = new ObsAudio(context, context.destination);
+    window.obsStats.audio = audio.stats;
+  }
+  if (context.state === 'suspended') context.resume().catch(() => {});
+  // The output clock can stand at 0 for a moment after it reports running; audio queued then would pile up.
+  if (context.state !== 'running' || context.currentTime === 0) return null;
+  return audio.push(sound.start, pcm(sound.data), sound.rate_numerator / sound.rate_denominator);
+}
+
+async function receive(packet) {
+  if (packet.seq !== packet.end) { window.obsStats.torn++; return; }
+  if (packet.session !== session) {
+    session = packet.session;
+    lastFrame = shownFrame = -1;
+    if (audio) audio.reset();
+  }
+  if (packet.frame === lastFrame) return;
+  lastFrame = packet.frame;
+  lastArrival = performance.now();
+  const ends = playAudio(packet);
+  const due = performance.now() + (ends === null ? 0 : Math.max(0, (ends - context.currentTime) * 1000));
+  const image = new Image();
+  image.src = packet.image;
+  try { await image.decode(); } catch (_) { window.obsStats.badImages++; return; }
+  const own = session, frame = packet.frame;
+  setTimeout(() => {
+    if (own !== session || frame <= shownFrame) return;
+    shownFrame = frame;
+    if (canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      fit();
+    }
+    screen2d.drawImage(image, 0, 0);
+    document.body.classList.add('live');
+    window.obsStats.frames++;
+  }, Math.max(0, due - performance.now()));
+}
+
+async function poll() {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 700);
+  try {
+    const response = await fetch('obs-live.json?t=' + Date.now(), { cache: 'no-store', signal: controller.signal });
+    if (!response.ok) throw Error('read');
+    const packet = JSON.parse(await response.text());
+    window.obsStats.packets++;
+    await receive(packet);
+  } catch (_) {
+    // A read that overlapped a write fails to parse; the next packet repeats the audio window.
+    window.obsStats.readErrors++;
+  } finally {
+    clearTimeout(timer);
+    setTimeout(poll, 8);
+  }
+}
+
+setInterval(() => {
+  if (document.body.classList.contains('live') && performance.now() - lastArrival > STALE_MS) {
+    document.body.classList.remove('live');
+    notice.textContent = '映像が届いていません';
+  }
+}, 250);
+addEventListener('resize', fit);
+fit();
+poll();
+</script>
+</html>
