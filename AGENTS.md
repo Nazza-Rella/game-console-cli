@@ -77,6 +77,7 @@ python .\console_cli.py --profile .\my-3ds.json capture stop --capture-dir $capt
 - 3DSの画像は400×480。上画面が(0,0)〜(399,239)、下画面が(40,240)〜(359,479)。下画面の点(x, y)をタッチするときは、`touch`に`x - 39`と`y - 239`を渡す。
 - DSの画像は256×384。上画面は(0,0)から、下画面は(0,192)から。
 - HDMI（dshow）は1画面そのまま。`--size 1280x720`のように小さく取ると、読むのも速い。
+- OpenCVのDirectShowでは黒い画面しか来ない機器（AVerMedia Live Gamer EXTREME 2など）も、このCLIの`capture start`なら取れる。開いてから最初の画面まで数秒かかることがある。
 
 ## 速く動かすために
 

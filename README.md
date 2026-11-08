@@ -145,6 +145,8 @@ python .\console_cli.py capture start --backend dshow --device "Dshow:@device:pn
 
 `--device`には、一覧の`stable_id`をそのまま渡します。`--size`と`--mjpg`を付けると、その解像度・形式のうち一番fpsの高いものを機器に要求します。当てはまるものが無ければ機器の既定のままで、`process.json`の`requested_format_applied`が`false`になります。解像度を小さめにすると、画像を読むのも速くなります。
 
+OpenCVのDirectShowでは黒い画面しか取れない機器（AVerMedia Live Gamer EXTREME 2など）も、`CaptureCli.exe`なら取り込めます。機器によっては、開いてから最初の画面まで数秒かかります。
+
 ### LL-SPA3の鍵
 
 LL-SPA3はプロダクトキーが無くても動きます（無いときは、約260秒ごとに映像の再初期化が入ります）。キーは`CaptureCli.exe`の隣の`Capture3DS.json`から読みます。n3DS_viewを使ったことがあるPCでは、そのキャッシュから自動で読み込んで保存します。`Capture3DS.json`は個人の鍵なので、共有しないでください。
@@ -181,7 +183,7 @@ HDMIのキャプチャーボードには使えません。OBSの「映像キャ�
 | DS用キャプチャー基板 | 確認済み |
 | DS FT入力 | 送信データのみ確認 |
 | Switch・ゲームキューブ（ns）入力 | 送信データのみ確認 |
-| HDMI（dshow） | 仮想カメラで確認 |
+| HDMI（dshow） | 確認済み（AVerMedia Live Gamer EXTREME 2、720×480 YUY2 60fps） |
 | Loopy製の初代3DS用キャプチャー基板 | 未確認 |
 
 送信データは、全組み合わせの対応表（`tests\vectors-*.txt`）と照合しています。
