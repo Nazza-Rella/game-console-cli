@@ -348,7 +348,10 @@ def capture_directory(args, backend):
 
 
 def capture_settings(args):
-    configured = load_profile(args).get('capture', {})
+    # Capture devices are listed before device.json is written, so a missing default profile counts as empty.
+    path = Path(args.profile)
+    profile = load_profile(args) if path.exists() or path != DEFAULT_PROFILE else {}
+    configured = profile.get('capture', {})
     configured_backend = configured.get('backend', 'll-spa3')
     backend = args.backend or configured_backend
     if backend not in BACKENDS:
@@ -366,6 +369,8 @@ def capture(args):
         raise ValueError('--size and --mjpg are only for the dshow backend')
     if args.obs and backend == 'dshow':
         raise ValueError('--obs is only for the 3DS/DS backends; add an HDMI capture board to OBS directly')
+    if args.view is not None and not 1024 <= args.view <= 65535:
+        raise ValueError('--view PORT must be 1024..65535')
     if args.size is not None:
         width, _, height = args.size.partition('x')
         if not (width.isdigit() and height.isdigit() and int(width) > 0 and int(height) > 0):
@@ -396,8 +401,10 @@ def capture(args):
         if args.obs:
             # The OBS browser source opens obs.html here; it reads obs-live.json next to it.
             for name in ('obs.html', 'obs-audio.js'):
-                shutil.copyfile(ROOT / 'obs' / name, directory / name)
+                shutil.copyfile(ROOT / 'web' / name, directory / name)
             command += ['--obs', args.obs]
+        if args.view is not None:
+            command += ['--view', str(args.view)]
         out_path, err_path = directory / (token + '.stdout.log'), directory / (token + '.stderr.log')
         with out_path.open('w') as out, err_path.open('w') as err:
             process = subprocess.Popen(command, cwd=ROOT, stdout=out, stderr=err,
@@ -413,6 +420,9 @@ def capture(args):
                                'backend': backend, 'device': device, 'directory': str(directory)}
                     if args.obs:
                         started['obs_page'] = str(directory / 'obs.html')
+                    if args.view is not None:
+                        view = (read_json(directory / 'process.json') or {}).get('view') or {}
+                        started['view_urls'] = view.get('urls', [])
                     print(json.dumps(started))
                     return 0
                 time.sleep(.15)
@@ -552,6 +562,9 @@ def parser():
     cap.add_argument('--obs', nargs='?', const='both', choices=('both', 'top', 'bottom'),
                      help='3DS/DS only: also feed the screens (default both) and game audio to obs.html '
                           'in the capture directory, for an OBS browser source')
+    cap.add_argument('--view', nargs='?', const=8000, type=int, metavar='PORT',
+                     help='Also show the capture to browsers on the home network, such as a phone, '
+                          'at http://<this PC>:PORT/ (default 8000; the addresses are in view_urls)')
     cap.set_defaults(func=capture)
     snap = sub.add_parser('snapshot', help='Copy a recent combined screen frame')
     snap.add_argument('output'); snap.set_defaults(func=snapshot)

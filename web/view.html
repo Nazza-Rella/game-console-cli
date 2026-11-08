@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'">
+<title>ゲーム機操作CLI</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000 }
+canvas { position: absolute; visibility: hidden }
+#notice { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+  box-sizing: border-box; background: #111; color: #bbb; font: 18px sans-serif; text-align: center; line-height: 1.6 }
+#sound { position: absolute; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  display: none; padding: 12px 22px; border: 0; border-radius: 24px; background: rgba(48, 48, 48, .85);
+  color: #fff; font: 16px sans-serif }
+body.live canvas { visibility: visible }
+body.live #notice { display: none }
+body.muted #sound { display: block }
+</style>
+<canvas id="screen" width="400" height="480"></canvas>
+<div id="notice">映像を待っています</div>
+<button id="sound" type="button">タップで音を出す</button>
+<script src="obs-audio.js"></script>
+<script>
+'use strict';
+// Live view for "console_cli.py capture start --view": asks /live for each newer screen and the audio
+// that came after the last sample it has. Video waits for the audio that came with it, as in obs.html.
+const canvas = document.getElementById('screen'), screen2d = canvas.getContext('2d', { alpha: false });
+const notice = document.getElementById('notice'), sound = document.getElementById('sound');
+const STALE_MS = 1500;
+let session = '', seq = -1, audioNext = -1, shownFrame = -1, lastArrival = 0, failures = 0;
+let context = null, audio = null, hasAudio = false;
+// Read by tests and when checking a view: packets read, frames shown and audio counters.
+window.viewStats = { packets: 0, frames: 0, errors: 0, badImages: 0, audio: null };
+
+function fit() {
+  const scale = Math.min(innerWidth / canvas.width, innerHeight / canvas.height);
+  const width = Math.round(canvas.width * scale), height = Math.round(canvas.height * scale);
+  // Small screens such as the 3DS stay sharp when enlarged; bigger ones are smoothed when reduced.
+  Object.assign(canvas.style, { width: width + 'px', height: height + 'px',
+    left: Math.floor((innerWidth - width) / 2) + 'px', top: Math.floor((innerHeight - height) / 2) + 'px',
+    imageRendering: scale >= 1 ? 'pixelated' : 'auto' });
+}
+
+function pcm(base64) {
+  const raw = atob(base64), bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return new Int16Array(bytes.buffer, 0, bytes.length >> 1);
+}
+
+// Browsers play sound only after a tap, so the audio starts from the button.
+function startSound() {
+  if (!context) {
+    context = new AudioContext({ latencyHint: 'interactive' });
+    audio = new ObsAudio(context, context.destination);
+    window.viewStats.audio = audio.stats;
+  }
+  context.resume().catch(() => {});
+  document.body.classList.remove('muted');
+}
+sound.addEventListener('click', startSound);
+
+// Context seconds at which these samples finish playing, or null while the sound is off.
+function playAudio(chunk, samples) {
+  if (!hasAudio) hasAudio = true;
+  if (!context || context.state !== 'running') {
+    document.body.classList.add('muted');
+    return null;
+  }
+  // The output clock can stand at 0 for a moment after it reports running; audio queued then would pile up.
+  if (context.currentTime === 0) return null;
+  return audio.push(chunk.start, samples, chunk.rate_numerator / chunk.rate_denominator);
+}
+
+async function receive(packet) {
+  if (packet.session !== session) {
+    session = packet.session;
+    shownFrame = -1;
+    if (audio) audio.reset();
+  }
+  seq = packet.seq;
+  lastArrival = performance.now();
+  let ends = null;
+  if (packet.audio && packet.audio.data) {
+    const samples = pcm(packet.audio.data);
+    audioNext = packet.audio.start + (samples.length >> 1);
+    ends = playAudio(packet.audio, samples);
+  }
+  const due = performance.now() + (ends === null ? 0 : Math.max(0, (ends - context.currentTime) * 1000));
+  const image = new Image();
+  image.src = packet.image;
+  try { await image.decode(); } catch (_) { window.viewStats.badImages++; return; }
+  const own = session, frame = packet.frame;
+  setTimeout(() => {
+    if (own !== session || frame <= shownFrame) return;
+    shownFrame = frame;
+    if (canvas.width !== image.naturalWidth || canvas.height !== image.naturalHeight) {
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      fit();
+    }
+    screen2d.drawImage(image, 0, 0);
+    document.body.classList.add('live');
+    window.viewStats.frames++;
+  }, Math.max(0, due - performance.now()));
+}
+
+async function poll() {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 5000);
+  let wait = 0;
+  try {
+    const query = 'live?session=' + encodeURIComponent(session) + '&after=' + seq + '&audio=' + audioNext;
+    const response = await fetch(query, { cache: 'no-store', signal: controller.signal });
+    if (response.status === 200) {
+      const packet = await response.json();
+      window.viewStats.packets++;
+      failures = 0;
+      await receive(packet);
+    } else if (response.status === 204) {
+      failures = 0;
+    } else {
+      throw Error('status ' + response.status);
+    }
+  } catch (_) {
+    window.viewStats.errors++;
+    failures++;
+    wait = Math.min(2000, 250 * failures);
+  } finally {
+    clearTimeout(timer);
+    setTimeout(poll, wait);
+  }
+}
+
+setInterval(() => {
+  if (hasAudio && context && context.state !== 'running') document.body.classList.add('muted');
+  if (failures >= 3) {
+    document.body.classList.remove('live');
+    notice.textContent = 'PCにつながりません。取り込みが動いているか、同じネットワークにいるかを確かめてください';
+  } else if (document.body.classList.contains('live') && performance.now() - lastArrival > STALE_MS) {
+    document.body.classList.remove('live');
+    notice.textContent = '映像が届いていません';
+  }
+}, 250);
+addEventListener('resize', fit);
+fit();
+poll();
+</script>
+</html>

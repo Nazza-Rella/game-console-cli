@@ -111,6 +111,17 @@ python .\console_cli.py --profile .\my-3ds.json capture start --obs top --captur
 - HDMI（dshow）には使えない。キャプチャーボードはOBSで直接取り込む。
 - 配信の開始・終了や、OBSの設定の変更は、ユーザーの指示があるときだけ行う。
 
+## スマホやタブレットで見せる
+
+```powershell
+python .\console_cli.py --profile .\my-3ds.json capture start --view --capture-dir $capture   # 既定のポートは8000。--view 8080のように変えられる
+```
+
+- ユーザーが見たいと言ったときだけ付ける。開始時のJSONの`view_urls`をそのままユーザーに伝える（同じルーターにつないだスマホのブラウザで開く。Tailscaleのアドレスなら外出先からも開ける）。
+- 3DS・DS・HDMIのどれでも使える。音が出るのは3DS・DSで、ページの「タップで音を出す」を押したとき。
+- 見せている間も、`snapshot`・`--snapshot`はそのまま使える。
+- 初回はWindowsのファイアウォールの確認が出る。許可するのはユーザー。ファイアウォールやネットワークの設定を自分で変えない。
+
 ## うまくいかないとき
 
 | 表示 | すること |
@@ -129,6 +140,8 @@ python .\console_cli.py --profile .\my-3ds.json capture start --obs top --captur
 | `Stop requested, but the input command did not exit` | 入力側が応答していない。ユーザーに伝え、強制終了はしない |
 | `--obs is only for the 3DS/DS backends` | dshowには使えない。OBSで直接取り込む |
 | OBSに「映像を待っています」「映像が届いていません」と出る | `capture status`で映像が動いているか、ソースのファイルが今の出力先の`obs.html`かを確かめる |
+| `--view`の開始で`SocketException`（アドレスが使われている） | そのポートをほかのソフトが使っている。`--view 8080`のように別のポートで開始し直す |
+| スマホに「PCにつながりません」と出る | スマホがPCと同じルーター（またはTailscale）につながっているか、ファイアウォールで`CaptureCli.exe`が許可されているか、PCのネットワークが「プライベート」かを、ユーザーに確かめてもらう |
 
 ## ほかの注意
 

@@ -1,7 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Drawing;
+using System.Drawing.Imaging;
+using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using Capture3DS;
@@ -52,6 +57,79 @@ class CaptureCliTests
         throw new Exception("No OBS packet for frame " + frame);
     }
 
+    class Response
+    {
+        internal int Status;
+        internal Dictionary<string, string> Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        internal byte[] Body = new byte[0];
+    }
+
+    static Response ReadResponse(Stream stream, bool headOnly)
+    {
+        var head = new List<byte>();
+        while (head.Count < 4 || head[head.Count - 4] != 13 || head[head.Count - 3] != 10
+            || head[head.Count - 2] != 13 || head[head.Count - 1] != 10)
+        {
+            int value = stream.ReadByte();
+            if (value < 0) throw new Exception("The connection closed before the response head ended");
+            head.Add((byte)value);
+        }
+        string[] lines = Encoding.ASCII.GetString(head.ToArray()).Split(new[] { "\r\n" }, StringSplitOptions.None);
+        var response = new Response { Status = Int32.Parse(lines[0].Split(' ')[1]) };
+        for (int i = 1; i < lines.Length; i++)
+        {
+            int colon = lines[i].IndexOf(':');
+            if (colon > 0) response.Headers[lines[i].Substring(0, colon)] = lines[i].Substring(colon + 1).Trim();
+        }
+        string length;
+        if (headOnly || !response.Headers.TryGetValue("Content-Length", out length)) return response;
+        response.Body = new byte[Int32.Parse(length)];
+        for (int read = 0; read < response.Body.Length; )
+        {
+            int count = stream.Read(response.Body, read, response.Body.Length - read);
+            if (count <= 0) throw new Exception("The response body ended early");
+            read += count;
+        }
+        return response;
+    }
+
+    static Response Http(int port, string request, bool headOnly = false)
+    {
+        using (var client = new TcpClient("127.0.0.1", port))
+        {
+            client.ReceiveTimeout = 5000;
+            NetworkStream stream = client.GetStream();
+            byte[] bytes = Encoding.ASCII.GetBytes(request);
+            stream.Write(bytes, 0, bytes.Length);
+            return ReadResponse(stream, headOnly);
+        }
+    }
+
+    // The packet of "/live", or null for 204.
+    static Dictionary<string, object> Live(int port, string query)
+    {
+        var response = Http(port, "GET /live?" + query + " HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n");
+        if (response.Status == 204) return null;
+        if (response.Status != 200) throw new Exception("Live view answered " + response.Status);
+        return new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue }.DeserializeObject(Encoding.UTF8.GetString(response.Body))
+            as Dictionary<string, object>;
+    }
+
+    static Bitmap Picture(Dictionary<string, object> packet)
+    {
+        string image = (string)packet["image"];
+        if (!image.StartsWith("data:image/jpeg;base64,")) throw new Exception("The live view image is not a JPEG data URL");
+        return new Bitmap(new MemoryStream(Convert.FromBase64String(image.Substring(image.IndexOf(',') + 1))));
+    }
+
+    static short[] Samples(Dictionary<string, object> packet)
+    {
+        byte[] bytes = Convert.FromBase64String((string)((Dictionary<string, object>)packet["audio"])["data"]);
+        var samples = new short[bytes.Length / 2];
+        Buffer.BlockCopy(bytes, 0, samples, 0, bytes.Length);
+        return samples;
+    }
+
     class Fake : ICancellableCapture3DSDevice
     {
         internal bool Disposed, Connected;
@@ -91,6 +169,7 @@ class CaptureCliTests
     {
         string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tests", "capture-fixture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        CaptureCli.ViewAddress = IPAddress.Loopback;
         string[] streamArgs = { "stream", "ll-spa3", "output", "device", "session" };
         Check(CaptureCli.SaveInterval(streamArgs) == 150, "default save interval remains 150ms");
         foreach (string interval in new[] { "20", "30", "10000" })
@@ -277,6 +356,150 @@ class CaptureCliTests
             Check(cancelled && blocking.Disposed, "stop must cancel blocking connect/read and dispose device");
             blocking.Entered.Dispose();
         }
+        // Live view: the port option, the addresses it answers, and its HTTP answers.
+        Check(CaptureCli.Options(streamArgs).ViewPort == 0, "no live view by default");
+        Check(CaptureCli.Options(new[] { "stream", "dshow", "out", "id", "token", "--view", "8000" }).ViewPort == 8000,
+            "live view port option");
+        foreach (var bad in new[] { new[] { "--view" }, new[] { "--view", "80" }, new[] { "--view", "65536" }, new[] { "--view", "x" } })
+        {
+            bool rejected = false;
+            var args = new List<string> { "stream", "dshow", "out", "id", "token" };
+            args.AddRange(bad);
+            try { CaptureCli.Options(args.ToArray()); }
+            catch (ArgumentException) { rejected = true; }
+            Check(rejected, "invalid live view port must fail before device access");
+        }
+        foreach (string address in new[] { "192.168.11.12", "10.1.2.3", "172.16.0.1", "172.31.255.254", "169.254.3.4",
+                                           "100.64.0.1", "100.127.255.254", "127.0.0.1" })
+            Check(LiveView.IsPrivate(IPAddress.Parse(address)), "home network or Tailscale address: " + address);
+        foreach (string address in new[] { "8.8.8.8", "1.1.1.1", "172.15.255.255", "172.32.0.1", "100.63.255.255",
+                                           "100.128.0.1", "192.169.0.1", "203.0.113.5" })
+            Check(!LiveView.IsPrivate(IPAddress.Parse(address)), "internet address refused: " + address);
+
+        long available = 1;
+        var sourceSize = new Size(400, 480);
+        LiveView.FrameSource synthetic = (long after, out long frame, out string utc) =>
+        {
+            frame = Interlocked.Read(ref available);
+            utc = DateTime.UtcNow.ToString("o");
+            if (frame <= after) return null;
+            var bitmap = new Bitmap(sourceSize.Width, sourceSize.Height, PixelFormat.Format24bppRgb);
+            using (var graphics = Graphics.FromImage(bitmap)) graphics.Clear(Color.Lime);
+            return bitmap;
+        };
+        int viewPort;
+        using (var view = new LiveView(IPAddress.Loopback, 0, CaptureCli.WebRoot, synthetic, "view-session"))
+        {
+            view.WaitMs = 300;
+            viewPort = view.Port;
+            byte[] page = File.ReadAllBytes(Path.Combine(CaptureCli.WebRoot, "view.html"));
+            var index = Http(view.Port, "GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n");
+            Check(index.Status == 200 && index.Body.SequenceEqual(page)
+                && index.Headers["Content-Type"].StartsWith("text/html"), "the view page");
+            var headOnly = Http(view.Port, "HEAD / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n", true);
+            Check(headOnly.Status == 200 && Int32.Parse(headOnly.Headers["Content-Length"]) == page.Length, "HEAD answers the length only");
+            Check(Http(view.Port, "GET /obs-audio.js HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n").Body
+                .SequenceEqual(File.ReadAllBytes(Path.Combine(CaptureCli.WebRoot, "obs-audio.js"))), "the audio script");
+            Check(Http(view.Port, "GET /latest.png HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n").Status == 404,
+                "no other file is served");
+            Check(Http(view.Port, "GET /../CaptureCli.cs HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n").Status == 404,
+                "no path outside the pages");
+            Check(Http(view.Port, "POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 0\r\n\r\n").Status == 405, "only GET and HEAD");
+            Check(Http(view.Port, "HELLO\r\n\r\n").Status == 400, "a broken request");
+            using (var client = new TcpClient("127.0.0.1", view.Port))
+            {
+                client.ReceiveTimeout = 5000;
+                NetworkStream stream = client.GetStream();
+                byte[] twice = Encoding.ASCII.GetBytes("GET /obs-audio.js HTTP/1.1\r\nHost: test\r\n\r\nGET / HTTP/1.1\r\nHost: test\r\n\r\n");
+                stream.Write(twice, 0, twice.Length);
+                var first = ReadResponse(stream, false);
+                var second = ReadResponse(stream, false);
+                Check(first.Status == 200 && second.Status == 200 && second.Body.SequenceEqual(page)
+                    && first.Headers["Connection"] == "keep-alive", "two requests on one connection");
+            }
+
+            var packet = Live(view.Port, "session=&after=-1&audio=-1");
+            Check(packet != null && (string)packet["session"] == "view-session" && Convert.ToInt64(packet["frame"]) == 1
+                && packet["audio"] == null, "the first screen, without audio before any arrived");
+            using (var bitmap = Picture(packet))
+            {
+                Color pixel = bitmap.GetPixel(200, 240);
+                Check(bitmap.Width == 400 && bitmap.Height == 480 && pixel.G > 230 && pixel.R < 30 && pixel.B < 30,
+                    "the screen as a JPEG of its own size");
+            }
+            long seq = Convert.ToInt64(packet["seq"]);
+            Check(Live(view.Port, "session=view-session&after=" + seq + "&audio=-1") == null, "no newer screen: 204");
+            Check(Convert.ToInt64(Live(view.Port, "session=old&after=" + (seq + 100) + "&audio=-1")["seq"]) == seq,
+                "another session gets the newest screen at once");
+
+            const int chunk = 547;
+            short value = 0;
+            Action<int> pushAudio = chunks =>
+            {
+                for (int c = 0; c < chunks; c++)
+                {
+                    var samples = new short[chunk * 2];
+                    for (int n = 0; n < samples.Length; n += 2) { samples[n] = value; samples[n + 1] = (short)-value; value++; }
+                    view.PushAudio(new Capture3DSAudioChunk(samples));
+                }
+            };
+            pushAudio(30);
+            Interlocked.Increment(ref available);
+            packet = Live(view.Port, "session=view-session&after=" + seq + "&audio=-1");
+            var sound = (Dictionary<string, object>)packet["audio"];
+            short[] pcm = Samples(packet);
+            int window = (int)(0.3 * Capture3DSAudioChunk.DsSampleRateNumerator / Capture3DSAudioChunk.DsSampleRateDenominator);
+            long start = Convert.ToInt64(sound["start"]);
+            Check(Convert.ToInt64(packet["seq"]) > seq && pcm.Length == window * 2 && start == 30 * chunk - window,
+                "a new page gets the newest 0.3 s of audio");
+            bool continuous = true;
+            for (int n = 0; n < pcm.Length / 2; n++)
+                if (pcm[n * 2] != (short)(start + n) || pcm[n * 2 + 1] != (short)-(start + n)) continuous = false;
+            Check(continuous && Convert.ToInt32(sound["rate_numerator"]) == Capture3DSAudioChunk.DsSampleRateNumerator,
+                "audio samples in order, left and right kept apart");
+
+            long audioNext = start + pcm.Length / 2;
+            seq = Convert.ToInt64(packet["seq"]);
+            pushAudio(5);
+            Interlocked.Increment(ref available);
+            packet = Live(view.Port, "session=view-session&after=" + seq + "&audio=" + audioNext);
+            pcm = Samples(packet);
+            start = Convert.ToInt64(((Dictionary<string, object>)packet["audio"])["start"]);
+            Check(start == audioNext && pcm.Length == 5 * chunk * 2 && pcm[0] == (short)audioNext,
+                "the next answer continues the audio from the page's last sample, each sample once");
+
+            seq = Convert.ToInt64(packet["seq"]);
+            sourceSize = new Size(1920, 1080);
+            Interlocked.Increment(ref available);
+            packet = Live(view.Port, "session=view-session&after=" + seq + "&audio=-1");
+            using (var bitmap = Picture(packet))
+                Check(bitmap.Width == 1280 && bitmap.Height == 720, "a 1080p screen is sent at 1280x720");
+        }
+        var released = new TcpListener(IPAddress.Loopback, viewPort);
+        released.Start();
+        released.Stop();
+        Check(true, "the live view releases its port");
+
+        // The 3DS/DS stream starts the live view and reports it in process.json.
+        var probe = new TcpListener(IPAddress.Loopback, 0);
+        probe.Start();
+        int streamPort = ((IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+        session = Guid.NewGuid().ToString("N");
+        var viewed = new Fake { Stop = Path.Combine(root, "stop-" + session + ".request"), StopAfterReads = 3 };
+        CaptureCli.Stream(() => viewed, root, "n3dsxl", session, 150, null, null, streamPort);
+        var processInfo = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(root, "process.json")))
+            as Dictionary<string, object>;
+        var viewInfo = processInfo["view"] as Dictionary<string, object>;
+        Check(viewInfo != null && Convert.ToInt32(viewInfo["port"]) == streamPort && viewInfo["urls"] is object[],
+            "process.json reports the live view");
+        Check(viewed.Disposed && viewed.Reads == 3, "a stream with the live view stops and disposes");
+        viewed.Entered.Dispose();
+        released = new TcpListener(IPAddress.Loopback, streamPort);
+        released.Start();
+        released.Stop();
+        Check(true, "the stream releases the live view port");
+
         fake.Entered.Dispose();
         // Test temp directory is retained as an inspectable PNG/status fixture.
         Console.WriteLine("PASS: " + passed + " capture assertions; no native devices opened.");

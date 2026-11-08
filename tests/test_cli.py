@@ -435,7 +435,7 @@ class CliTests(unittest.TestCase):
                     cli.capture(args)
             self.assertEqual(launch.call_args.args[0][-2:], ['--obs', 'top'])
             for name in ('obs.html', 'obs-audio.js'):
-                self.assertEqual((Path(temp) / name).read_bytes(), (ROOT / 'obs' / name).read_bytes())
+                self.assertEqual((Path(temp) / name).read_bytes(), (ROOT / 'web' / name).read_bytes())
         self.assertEqual(cli.parser().parse_args(['capture', 'start', '--obs']).obs, 'both')
         self.assertIsNone(cli.parser().parse_args(['capture', 'start']).obs)
 
@@ -444,6 +444,43 @@ class CliTests(unittest.TestCase):
             self.assertEqual(cli.main(['capture', 'start', '--backend', 'dshow', '--device', 'Dshow:x', '--obs']), 1)
         launch.assert_not_called()
         self.assertIn('--obs is only for the 3DS/DS backends', error.getvalue())
+
+    def test_view_start_passes_the_port_and_prints_the_addresses(self):
+        for backend, device in (('dshow', 'Dshow:x'), ('n3dsxl', 'N3dsxl:serial:test')):
+            with tempfile.TemporaryDirectory(dir=ROOT / 'tests') as temp:
+                token = 'a' * 32
+                (Path(temp) / 'status.json').write_text(json.dumps({'session': token}))
+                urls = ['http://192.168.11.12:8080/', 'http://100.101.102.103:8080/']
+                (Path(temp) / 'process.json').write_text(json.dumps({'session': token, 'view': {'port': 8080, 'urls': urls}}))
+                process = mock.Mock(pid=123)
+                process.poll.return_value = None
+                with mock.patch.object(cli.subprocess, 'Popen', return_value=process) as launch, \
+                     mock.patch.object(cli.uuid, 'uuid4', return_value=SimpleNamespace(hex=token)), \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(cli.main(['capture', 'start', '--backend', backend, '--device', device,
+                                               '--capture-dir', temp, '--view', '8080']), 0)
+                self.assertEqual(launch.call_args.args[0][-2:], ['--view', '8080'])
+                self.assertEqual(json.loads(output.getvalue())['view_urls'], urls)
+        self.assertEqual(cli.parser().parse_args(['capture', 'start', '--view']).view, 8000)
+        self.assertIsNone(cli.parser().parse_args(['capture', 'start']).view)
+
+    def test_capture_list_needs_no_default_profile_yet(self):
+        missing = ROOT / 'tests' / 'no-such-device.json'
+        with mock.patch.object(cli, 'DEFAULT_PROFILE', missing), \
+             mock.patch.object(cli.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
+            self.assertEqual(cli.main(['capture', 'list', '--backend', 'dshow']), 0)
+        self.assertEqual(run.call_args.args[0][1:], ['list', 'dshow'])
+        with mock.patch.object(cli.subprocess, 'run') as run, contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(cli.main(['--profile', str(missing), 'capture', 'list', '--backend', 'dshow']), 1)
+        run.assert_not_called()
+        self.assertIn('FileNotFoundError', error.getvalue())
+
+    def test_view_port_is_checked_before_launch(self):
+        with mock.patch.object(cli.subprocess, 'Popen') as launch, contextlib.redirect_stderr(io.StringIO()) as error:
+            for port in ('80', '1023', '65536'):
+                self.assertEqual(cli.main(['capture', 'start', '--backend', 'dshow', '--device', 'Dshow:x', '--view', port]), 1)
+        launch.assert_not_called()
+        self.assertIn('--view PORT must be 1024..65535', error.getvalue())
 
     def test_invalid_capture_interval_never_launches_worker(self):
         with mock.patch.object(cli.subprocess, 'Popen') as launch, \
